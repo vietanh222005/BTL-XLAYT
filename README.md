@@ -26,3 +26,31 @@ MỤC   ĐÍCH
    + Quét ảnh thư mục chứa ảnh X-Quang gốc và thư mục chứa ảnh nhãn, sau đó ghép chính xác ảnh của bệnh nhân A với đúng mask của bệnh nhân A, đồng thời xử lý các trường hợp lệch đuôi file
 2. Tiền xử lý và tăng cường dữ liệu đồng bộ
    + Mục đích quan trọng nhất của file này trong bài toán phân đoạn nahr là đảm bảo tính đồng bộ không gian. Khi áp dụng các kỹ thuật như thu phóng lật,... thì ma trận biến đổi áp dụng lên ảnh gốc cũng phải được áp dụng y hệt lên ảnh mask. Nếu không có bước này, tọa độ đốt sống trên nhãn sẽ bị lệch hoàn toàn so với ảnh gốc
+
+MODEL.py
+1. Khối SE (Squeeze-and-Excitation)
+- Phân tích luồng xử lý
+  + Giả sử Tensor có đầu vào x đang ở 1 lớp nào đó giữa mạng có kích thước là: (Batch=4, Channels=64, Height=128, Width=128)
+  + Nghĩa là tại thời điểm này, máy tính đang nhìn vào 64 bức ảnh (64 kênh đặc trưng), mỗi bức kích thước 128x128. Mỗi kênh đang nhìn một thứ khác nhau: Kênh 1 thấy nền đen, kênh 2 thấy viền xương, kênh 3 thấy mô mềm, ...
+Khối SE sẽ xử lý 64 kênh này qua 3 bước
+  - Bước 1: Squeeze (Ép không gian) 
+    + Code y = self.avg_pool(x).view(b, c)
+    + Bản chất toán học: Hàm AdaptiveAvgPool2d(1) sẽ lấy tính trung bình cộng của toàn bộ điểm ảnh trên mặt phẳng 128x128 của từng kênh một
+    + Kết quả: Ma trận từ 128x128 bị ép dẹp thành đúng 1x1 pixel
+    + Ý nghĩa: Lúc này, mỗi kênh trong số 64 kênh chỉ còn lại 1 con số duy nhất. Con số này đại diện cho mức độ hiện diện của đặc trưng đó trên toàn bộ bức ảnh
+   - Bước 2: Excitation (Kích thích trọng số)
+     + Code: y = self.fc(y).view(b, c, 1, 1)
+     + Bản chất toán học: 64 con số vừa thu được sẽ đi qua 1 mạng nơ-ron nhỏ gồm 2 lớp (Linear/Fully Connected)
+       + Lớp Linear 1: Giảm số lượng từ 64 xuống còn 4 (giảm 16 lần - reduction=16). Mục đích là để các kênh phải nói chuyện và tổng hợp thông tin với nhau, đồng thời giảm khối lượng tính toán
+       + Hàm ReLU: Lọc bỏ các giá trị âm
+       + Lớp Linear 2: Phóng to ngược lại từ 4 lên đúng 64 kênh như ban đầu
+       + Hàm Sigmoid: Ép 64 con số này về khoảng [0,1]
+    + Kết quả: Ta thu được một vector gồm 64 con số thập phân từ 0-1. Đây chính là Vector trọng số
+   - Bước 3: Scale ( Nhân điều chỉnh lại ma trận gốc )
+     + Code: return x * y.expand_as(x)
+     + Bản chất toán học: Phép nhân trực tiếp
+       + Nó lấy Vector trọng số nhân ngược lại vào ma trận gốc x (size 64x128x128)
+     + Ý nghĩa thực tế:
+       + Giả sử kênh số 2 (chuyên tìm xương) được mạng định giá trọng số là 0.95. Toàn bộ điểm ảnh của kênh 2 sẽ nhân được với 0.95
+       + Giả sử Kênh số 5 (chuyên nhìn mỡ/nhiễu) bị mạng định giá trọng số là 0.01. Toàn bộ điểm ảnh của Kênh 5 nhân với 0.01 $\rightarrow$ Các giá trị pixel gần như biến thành 0 (Bị triệt tiêu/Squeeze).
+   
